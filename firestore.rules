@@ -1,0 +1,93 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}
+    // Document ID: userId (Auth UID)
+    // Fields:
+    //   - height: number (required)
+    //   - weight: number (required)
+    //   - age: number (required)
+    //   - gender: string (required, 'male'|'female')
+    //   - activityLevel: string (required)
+    //   - calorieGoal: number (required)
+    //   - waterGoal: number (required)
+    //
+    // Collection: /users/{userId}/history/{scanId}
+    // Document ID: scanId (auto-generated)
+    // Fields:
+    //   - image: string (optional, base64)
+    //   - nutrition: map (required)
+    //   - timestamp: number (required)
+    //
+    // Collection: /users/{userId}/schedule/weekly
+    // Document ID: 'weekly'
+    // Fields:
+    //   - Saturday, Sunday, Monday, Tuesday, Wednesday, Thursday, Friday: maps
+    //
+    // Collection: /users/{userId}/stats/water
+    // Document ID: 'water'
+    // Fields:
+    //   - intake: number
+    //   - lastUpdated: number
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['height', 'weight', 'age', 'gender', 'activityLevel', 'calorieGoal', 'waterGoal']) &&
+             data.height is number && data.height > 0 && data.height < 300 &&
+             data.weight is number && data.weight > 0 && data.weight < 500 &&
+             data.age is number && data.age > 0 && data.age < 120 &&
+             data.gender in ['male', 'female'] &&
+             data.calorieGoal is number && data.calorieGoal > 0 &&
+             data.waterGoal is number && data.waterGoal > 0;
+    }
+
+    function isValidHistory(data) {
+      return data.keys().hasAll(['nutrition', 'timestamp']) &&
+             data.nutrition is map &&
+             data.timestamp is number;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidUserProfile(request.resource.data);
+
+      match /history/{scanId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidHistory(request.resource.data);
+        allow delete: if isOwner(userId);
+      }
+
+      match /schedule/weekly {
+        allow read: if isOwner(userId);
+        allow write: if isOwner(userId);
+      }
+
+      match /stats/water {
+        allow read: if isOwner(userId);
+        allow write: if isOwner(userId);
+      }
+    }
+  }
+}

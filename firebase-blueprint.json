@@ -1,0 +1,137 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Stores user physical data and goals",
+      "type": "object",
+      "properties": {
+        "height": { "type": "number" },
+        "weight": { "type": "number" },
+        "age": { "type": "number" },
+        "gender": { "type": "string", "enum": ["male", "female"] },
+        "activityLevel": { "type": "string", "enum": ["sedentary", "light", "moderate", "active", "very_active"] },
+        "calorieGoal": { "type": "number" },
+        "waterGoal": { "type": "number" }
+      },
+      "required": ["height", "weight", "age", "gender", "activityLevel", "calorieGoal", "waterGoal"]
+    },
+    "ScanHistory": {
+      "title": "Scan History",
+      "description": "Stores nutritional analysis of scanned or manual meals",
+      "type": "object",
+      "properties": {
+        "image": { "type": "string", "description": "Base64 image data" },
+        "nutrition": { "$ref": "NutritionInfo" },
+        "timestamp": { "type": "number" },
+        "category": { "type": "string", "enum": ["breakfast", "lunch", "dinner", "snack"] },
+        "notes": { "type": "string" }
+      },
+      "required": ["nutrition", "timestamp", "category"]
+    },
+    "NutritionInfo": {
+      "title": "Nutrition Info",
+      "description": "Detailed nutritional breakdown",
+      "type": "object",
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "FoodItem" } },
+        "totalCalories": { "type": "number" },
+        "description": { "type": "string" }
+      },
+      "required": ["items", "totalCalories", "description"]
+    },
+    "FoodItem": {
+      "title": "Food Item",
+      "description": "Individual food component",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "weight": { "type": "number" },
+        "calories": { "type": "number" },
+        "protein": { "type": "number" },
+        "carbs": { "type": "number" },
+        "fats": { "type": "number" },
+        "caloriesPer100g": { "type": "number" }
+      },
+      "required": ["name", "weight", "calories", "protein", "carbs", "fats", "caloriesPer100g"]
+    },
+    "WeeklySchedule": {
+      "title": "Weekly Schedule",
+      "description": "User's weekly meal and workout plan",
+      "type": "object",
+      "properties": {
+        "Saturday": { "$ref": "DaySchedule" },
+        "Sunday": { "$ref": "DaySchedule" },
+        "Monday": { "$ref": "DaySchedule" },
+        "Tuesday": { "$ref": "DaySchedule" },
+        "Wednesday": { "$ref": "DaySchedule" },
+        "Thursday": { "$ref": "DaySchedule" },
+        "Friday": { "$ref": "DaySchedule" }
+      }
+    },
+    "DaySchedule": {
+      "title": "Day Schedule",
+      "description": "Plan for a single day",
+      "type": "object",
+      "properties": {
+        "meals": { "type": "array", "items": { "$ref": "MealEntry" } },
+        "workouts": { "type": "array", "items": { "$ref": "Workout" } }
+      }
+    },
+    "MealEntry": {
+      "title": "Meal Entry",
+      "description": "A meal in the schedule",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "calories": { "type": "number" },
+        "type": { "type": "string", "enum": ["breakfast", "lunch", "dinner", "snack"] }
+      }
+    },
+    "Workout": {
+      "title": "Workout",
+      "description": "A workout in the schedule",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "exercises": { "type": "array", "items": { "$ref": "Exercise" } }
+      }
+    },
+    "Exercise": {
+      "title": "Exercise",
+      "description": "An exercise in a workout",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "sets": { "type": "string" },
+        "reps": { "type": "string" },
+        "videoUrl": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document"
+    },
+    "/users/{userId}/history/{scanId}": {
+      "schema": "ScanHistory",
+      "description": "User's meal history"
+    },
+    "/users/{userId}/schedule/weekly": {
+      "schema": "WeeklySchedule",
+      "description": "User's weekly schedule"
+    },
+    "/users/{userId}/stats/water": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "intake": { "type": "number" },
+          "lastUpdated": { "type": "number" }
+        }
+      },
+      "description": "User's daily water intake"
+    }
+  }
+}

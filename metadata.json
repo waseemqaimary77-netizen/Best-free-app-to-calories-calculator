@@ -1,0 +1,5 @@
+{
+  "name": "CalorieSnap - Calorie Counter by Photo",
+  "description": "An AI-powered app that estimates calories and nutritional information from food photos using Gemini.",
+  "requestFramePermissions": ["camera"]
+}
