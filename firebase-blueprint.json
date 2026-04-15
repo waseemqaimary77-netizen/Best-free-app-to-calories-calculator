@@ -132,6 +132,20 @@
         }
       },
       "description": "User's daily water intake"
+    },
+    "/users/{userId}/activities/{activityId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "duration": { "type": "number" },
+          "caloriesBurned": { "type": "number" },
+          "timestamp": { "type": "number" },
+          "notes": { "type": "string" }
+        },
+        "required": ["type", "duration", "caloriesBurned", "timestamp"]
+      },
+      "description": "User's physical activities"
     }
   }
 }

@@ -128,6 +128,15 @@ interface ChatMessage {
   content: string;
 }
 
+interface ActivityLog {
+  id: string;
+  type: string;
+  duration: number; // in minutes
+  caloriesBurned: number;
+  timestamp: number;
+  notes?: string;
+}
+
 // --- Constants ---
 const MODEL_NAME = "gemini-3-flash-preview";
 const DAYS = ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
@@ -139,7 +148,7 @@ function CalorieSnapApp() {
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   // Navigation
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'schedule' | 'chat' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'activities' | 'schedule' | 'chat' | 'settings'>('dashboard');
 
   // User Data
   const [profile, setProfile] = useState<UserProfile>({
@@ -154,6 +163,7 @@ function CalorieSnapApp() {
 
   // Tracking Data
   const [history, setHistory] = useState<ScanHistory[]>([]);
+  const [activities, setActivities] = useState<ActivityLog[]>([]);
   const [waterIntake, setWaterIntake] = useState(0);
   const [schedule, setSchedule] = useState<WeeklySchedule>(() => {
     const initial: WeeklySchedule = {};
@@ -176,6 +186,9 @@ function CalorieSnapApp() {
   const [pendingImageData, setPendingImageData] = useState<string | null>(null);
   const [mealCategory, setMealCategory] = useState<'breakfast' | 'lunch' | 'dinner' | 'snack'>('breakfast');
   const [mealNotes, setMealNotes] = useState('');
+  const [showActivityModal, setShowActivityModal] = useState(false);
+  const [newActivity, setNewActivity] = useState({ type: 'ركض', duration: '', calories: '', notes: '' });
+  const [calculatingActivity, setCalculatingActivity] = useState(false);
   
   // Chat States
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -243,7 +256,21 @@ function CalorieSnapApp() {
       setHistory(items);
     }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/history`));
 
-    return () => unsubscribeHistory();
+    // Real-time Activities
+    const activityCol = collection(db, 'users', user.uid, 'activities');
+    const aq = query(activityCol, orderBy('timestamp', 'desc'));
+    const unsubscribeActivities = onSnapshot(aq, (snapshot) => {
+      const items: ActivityLog[] = [];
+      snapshot.forEach(doc => {
+        items.push({ id: doc.id, ...doc.data() } as ActivityLog);
+      });
+      setActivities(items);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/activities`));
+
+    return () => {
+      unsubscribeHistory();
+      unsubscribeActivities();
+    };
   }, [user, isAuthReady]);
 
   // Update Profile in Firestore
@@ -528,9 +555,72 @@ function CalorieSnapApp() {
     }
   };
 
+  const calculateActivityCalories = async () => {
+    if (!newActivity.type || !newActivity.duration) return;
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return;
+
+    setCalculatingActivity(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: MODEL_NAME,
+        contents: `Estimate calories burned for ${newActivity.duration} minutes of ${newActivity.type}. User profile: ${JSON.stringify(profile)}. Return JSON: { calories: number }`,
+        config: { responseMimeType: "application/json" }
+      });
+      const data = JSON.parse(response.text || '{}');
+      setNewActivity(prev => ({ ...prev, calories: data.calories.toString() }));
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setCalculatingActivity(false);
+    }
+  };
+
+  const addActivity = async () => {
+    if (!newActivity.type || !newActivity.duration || !newActivity.calories) return;
+    
+    const entry = {
+      type: newActivity.type,
+      duration: parseInt(newActivity.duration),
+      caloriesBurned: parseInt(newActivity.calories),
+      timestamp: Date.now(),
+      notes: newActivity.notes
+    };
+
+    if (user) {
+      try {
+        await addDoc(collection(db, 'users', user.uid, 'activities'), entry);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `users/${user.uid}/activities`);
+      }
+    } else {
+      setActivities(prev => [{ id: Date.now().toString(), ...entry }, ...prev]);
+    }
+
+    setShowActivityModal(false);
+    setNewActivity({ type: 'ركض', duration: '', calories: '', notes: '' });
+  };
+
+  const deleteActivity = async (id: string) => {
+    if (user) {
+      try {
+        await deleteDoc(doc(db, 'users', user.uid, 'activities', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/activities/${id}`);
+      }
+    } else {
+      setActivities(prev => prev.filter(item => item.id !== id));
+    }
+  };
+
   const totalCaloriesToday = history
     .filter(item => new Date(item.timestamp).toDateString() === new Date().toDateString())
     .reduce((sum, item) => sum + (item.nutrition.totalCalories || 0), 0);
+
+  const totalBurnedToday = activities
+    .filter(item => new Date(item.timestamp).toDateString() === new Date().toDateString())
+    .reduce((sum, item) => sum + (item.caloriesBurned || 0), 0);
 
   // AI Chat Logic
   const sendMessage = async () => {
@@ -602,20 +692,31 @@ function CalorieSnapApp() {
     <div className="space-y-6">
       {/* Calorie Progress */}
       <section className="bg-white p-6 rounded-3xl shadow-sm border border-black/5">
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div>
+            <h3 className="text-gray-500 text-[10px] font-bold uppercase mb-1">المأخوذ</h3>
+            <p className="text-2xl font-black text-emerald-600">{totalCaloriesToday}</p>
+          </div>
+          <div className="text-right">
+            <h3 className="text-gray-500 text-[10px] font-bold uppercase mb-1">المحروق</h3>
+            <p className="text-2xl font-black text-orange-500">{totalBurnedToday}</p>
+          </div>
+        </div>
+
         <div className="flex justify-between items-end mb-4">
           <div>
-            <h3 className="text-gray-500 text-sm font-medium">السعرات اليومية</h3>
-            <p className="text-3xl font-black text-emerald-600">{totalCaloriesToday} <span className="text-lg font-normal text-gray-400">/ {profile.calorieGoal}</span></p>
+            <h3 className="text-gray-500 text-sm font-medium">صافي السعرات</h3>
+            <p className="text-3xl font-black text-gray-900">{totalCaloriesToday - totalBurnedToday} <span className="text-lg font-normal text-gray-400">/ {profile.calorieGoal}</span></p>
           </div>
           <div className="text-right">
             <p className="text-sm font-bold text-gray-400">المتبقي</p>
-            <p className="text-xl font-bold">{Math.max(0, profile.calorieGoal - totalCaloriesToday)}</p>
+            <p className="text-xl font-bold">{Math.max(0, profile.calorieGoal - (totalCaloriesToday - totalBurnedToday))}</p>
           </div>
         </div>
         <div className="h-4 bg-gray-100 rounded-full overflow-hidden">
           <motion.div 
             initial={{ width: 0 }}
-            animate={{ width: `${Math.min(100, (totalCaloriesToday / profile.calorieGoal) * 100)}%` }}
+            animate={{ width: `${Math.min(100, ((totalCaloriesToday - totalBurnedToday) / profile.calorieGoal) * 100)}%` }}
             className="h-full bg-emerald-500"
           />
         </div>
@@ -908,6 +1009,61 @@ function CalorieSnapApp() {
     </div>
   );
 
+  const renderActivities = () => (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-black">الأنشطة الرياضية</h2>
+        <button 
+          onClick={() => setShowActivityModal(true)}
+          className="bg-orange-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-orange-100"
+        >
+          <Plus className="w-5 h-5" /> إضافة نشاط
+        </button>
+      </div>
+
+      <div className="space-y-4">
+        {activities.length === 0 ? (
+          <div className="text-center py-12 bg-white rounded-3xl border border-dashed border-gray-200">
+            <Play className="w-12 h-12 text-gray-200 mx-auto mb-4" />
+            <p className="text-gray-400 font-medium">لم يتم تسجيل أي أنشطة بعد</p>
+          </div>
+        ) : (
+          activities.map(activity => (
+            <motion.div 
+              key={activity.id}
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="bg-white p-4 rounded-2xl shadow-sm border border-black/5 flex items-center justify-between group"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-orange-50 rounded-xl flex items-center justify-center text-orange-500">
+                  <Play className="w-6 h-6" />
+                </div>
+                <div>
+                  <h4 className="font-bold">{activity.type}</h4>
+                  <p className="text-xs text-gray-400">{activity.duration} دقيقة • {new Date(activity.timestamp).toLocaleTimeString('ar-EG')}</p>
+                  {activity.notes && <p className="text-[10px] text-gray-500 italic mt-1">"{activity.notes}"</p>}
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="text-right">
+                  <p className="font-black text-orange-500">-{activity.caloriesBurned}</p>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase">سعرة</p>
+                </div>
+                <button 
+                  onClick={() => deleteActivity(activity.id)}
+                  className="p-2 text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </motion.div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
   const renderSettings = () => (
     <div className="space-y-8">
       <div className="text-center">
@@ -1065,6 +1221,7 @@ function CalorieSnapApp() {
             transition={{ duration: 0.2 }}
           >
             {activeTab === 'dashboard' && renderDashboard()}
+            {activeTab === 'activities' && renderActivities()}
             {activeTab === 'schedule' && renderSchedule()}
             {activeTab === 'chat' && renderChat()}
             {activeTab === 'settings' && renderSettings()}
@@ -1076,6 +1233,7 @@ function CalorieSnapApp() {
       <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-lg border-t border-black/5 px-6 py-4 z-50">
         <div className="max-w-2xl mx-auto flex justify-between items-center">
           <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<Utensils />} label="الرئيسية" />
+          <NavButton active={activeTab === 'activities'} onClick={() => setActiveTab('activities')} icon={<Play />} label="الأنشطة" />
           <NavButton active={activeTab === 'schedule'} onClick={() => setActiveTab('schedule')} icon={<Calendar />} label="الجدول" />
           <NavButton active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} icon={<MessageSquare />} label="المدرب" />
           <NavButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<Settings />} label="الإعدادات" />
@@ -1084,6 +1242,96 @@ function CalorieSnapApp() {
 
       {/* Hidden Inputs */}
       <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
+
+      {/* Activity Modal */}
+      <AnimatePresence>
+        {showActivityModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setShowActivityModal(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+              className="relative bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl space-y-6"
+            >
+              <div className="flex justify-between items-center">
+                <h3 className="text-xl font-bold">تسجيل نشاط رياضي</h3>
+                <button onClick={() => setShowActivityModal(false)}><X className="w-6 h-6 text-gray-400" /></button>
+              </div>
+              
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400">نوع النشاط</label>
+                  <select 
+                    value={newActivity.type}
+                    onChange={e => setNewActivity({...newActivity, type: e.target.value})}
+                    className="w-full bg-gray-50 border-none p-4 rounded-2xl font-bold"
+                  >
+                    <option value="ركض">ركض</option>
+                    <option value="مشي">مشي</option>
+                    <option value="سباحة">سباحة</option>
+                    <option value="ركوب دراجة">ركوب دراجة</option>
+                    <option value="جيم حديد">جيم حديد</option>
+                    <option value="كرة قدم">كرة قدم</option>
+                    <option value="يوغا">يوغا</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-gray-400">الوقت (دقيقة)</label>
+                    <input 
+                      type="number"
+                      value={newActivity.duration}
+                      onChange={e => setNewActivity({...newActivity, duration: e.target.value})}
+                      placeholder="30"
+                      className="w-full bg-gray-50 border-none p-4 rounded-2xl"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-gray-400">السعرات المحروقة</label>
+                    <div className="relative">
+                      <input 
+                        type="number"
+                        value={newActivity.calories}
+                        onChange={e => setNewActivity({...newActivity, calories: e.target.value})}
+                        placeholder="0"
+                        className="w-full bg-gray-50 border-none p-4 rounded-2xl"
+                      />
+                      <button 
+                        onClick={calculateActivityCalories}
+                        disabled={calculatingActivity || !newActivity.type || !newActivity.duration}
+                        className="absolute left-2 top-2 bottom-2 bg-orange-100 text-orange-600 px-3 rounded-xl text-[10px] font-bold disabled:opacity-50"
+                      >
+                        {calculatingActivity ? <Loader2 className="w-3 h-3 animate-spin" /> : 'احسب'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400">ملاحظات (اختياري)</label>
+                  <textarea 
+                    value={newActivity.notes}
+                    onChange={e => setNewActivity({...newActivity, notes: e.target.value})}
+                    placeholder="مثلاً: ركض سريع، تمرين أرجل..."
+                    className="w-full bg-gray-50 border-none p-4 rounded-2xl text-sm resize-none h-20"
+                  />
+                </div>
+              </div>
+
+              <button 
+                onClick={addActivity}
+                className="w-full py-4 bg-orange-500 text-white rounded-2xl font-bold shadow-lg shadow-orange-100"
+              >
+                تسجيل النشاط
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Manual Meal Modal */}
       <AnimatePresence>
